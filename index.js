@@ -477,8 +477,22 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, () => {
-  log.info(`sweet-whatsapp רץ על פורט ${PORT}`);
+// ברירת המחדל היא לולאה מקומית בלבד, והשירות נחשף דרך הפרוקסי (Apache/nginx).
+// חשוב: ל-Socket.IO אין אימות — כל מי שמתחבר ושולח "init-whatsapp" מקבל את
+// קוד ה-QR. ה-CORS מגן רק על דפדפנים; לקוח socket.io ישיר מתעלם ממנו.
+// האזנה על 0.0.0.0 הייתה מאפשרת לכל אחד באינטרנט לשאוב את ה-QR ולחבר את
+// השרת לחשבון ווצאפ אחר. לשינוי מכוון בלבד: SERVER_BIND_HOST=0.0.0.0
+const BIND_HOST = process.env.SERVER_BIND_HOST || "127.0.0.1";
+
+server.listen(PORT, BIND_HOST, () => {
+  log.info(`sweet-whatsapp רץ על ${BIND_HOST}:${PORT}`);
+
+  if (BIND_HOST === "0.0.0.0") {
+    log.warn(
+      "השרת מאזין על כל הממשקים. ל-Socket.IO אין אימות — קוד ה-QR חשוף " +
+        "לכל מי שמגיע לפורט. יש להשתמש בזה רק מאחורי חומת אש."
+    );
+  }
 
   if (!ORIGINS.length) {
     log.warn(
