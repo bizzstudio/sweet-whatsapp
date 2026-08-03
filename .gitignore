@@ -1,0 +1,14 @@
+node_modules
+coverage
+
+# חוסמים כל וריאציה (.env.backup-... וכו') כדי שגיבוי או קובץ זמני עם
+# סודות לא ייכנס ל-git בטעות. רק התבנית .env.example נכנסת.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
+
+# תיקיית הסשן של ווצאפ — הזהות של החיבור. לעולם לא בגיט.
+/auth_data
