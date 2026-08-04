@@ -136,8 +136,21 @@ const describeMedia = (content) => {
  * בלי הבחירה הזו הטלפון שמועבר לבקאנד הוא ה-LID, הרשימה הלבנה לא מוצאת התאמה,
  * וכל הזמנה מלקוח ותיק נוחתת ב"שולח לא מוכר".
  */
-const senderJid = (key = {}) =>
-  key.senderPn || key.participantPn || key.remoteJid || "";
+// שמות השדות שונים בין גרסאות Baileys, ולכן שתי הסכימות נתמכות:
+//   6.7.x  →  senderPn (פרטי) · participantPn (קבוצה)
+//   7.x    →  remoteJidAlt (פרטי) · participantAlt (קבוצה)
+// כך שדרוג או שדרוג-לאחור אינו שובר את זיהוי המספר בשקט.
+const senderJid = (key = {}) => {
+  const isGroup = String(key.remoteJid || "").endsWith("@g.us");
+
+  if (isGroup) {
+    return (
+      key.participantPn || key.participantAlt || key.participant || key.remoteJid || ""
+    );
+  }
+
+  return key.senderPn || key.remoteJidAlt || key.remoteJid || "";
+};
 
 /**
  * בניית המטען לשליחה. מחזיר null כשאין בהודעה שום דבר להעביר.
