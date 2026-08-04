@@ -144,8 +144,15 @@ location /sweet-whatsapp-socket/ {
 location /sweet-whatsapp/ {
   proxy_pass http://127.0.0.1:3009/;
   proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;                          # חובה
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;      # חובה
 }
 ```
+
+> ⚠️ **שתי שורות ה-`X-Forwarded-*` אינן קישוט.** בלעדיהן כל הבקשות נראות
+> לשרת כמגיעות מ-`127.0.0.1`, וחסימת ניחוש המפתחות (10 כשלונות ל-15 דקות)
+> הייתה נועלת את **כל** המשתמשים יחד — כולל הדשבורד — בגלל תוקף בודד.
+> בקוד מוגדר `trust proxy = 1` בהתאמה.
 
 `nginx -t && systemctl reload nginx`
 

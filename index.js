@@ -56,6 +56,15 @@ const ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || "")
 const log = pino({ level: "info" });
 
 const app = express();
+
+// מאחורי nginx כל הבקשות מגיעות מ-127.0.0.1. בלי ההגדרה הזו `req.ip` זהה
+// לכולם, וחסימת ניחוש המפתחות הייתה נועלת את **כל** המשתמשים יחד — כולל
+// הדשבורד — אחרי 10 ניסיונות כושלים של תוקף בודד.
+//
+// הערך 1 = לסמוך על שכבת פרוקסי אחת בלבד (ה-nginx שלנו). ‏true היה מאפשר
+// לכל אחד לזייף X-Forwarded-For ולעקוף את החסימה.
+app.set("trust proxy", 1);
+
 app.use(express.json({ limit: "1mb" }));
 app.use(cors({ origin: ORIGINS.length ? ORIGINS : true }));
 
@@ -128,10 +137,11 @@ async function buildClient() {
   // בכל פעם ש-WhatsApp מעדכנת פרוטוקול, בלי קשר לגרסת הספרייה.
   const { version } = await fetchLatestBaileysVersion();
 
+  // ‏printQRInTerminal הוסרה בגרסה 7 (מדפיסה אזהרת deprecation). ה-QR מטופל
+  // כאן ידנית באירוע connection.update — גם לדשבורד וגם לקונסול.
   const sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: false, // מודפס ידנית למטה, ובעיקר נשלח לדשבורד
     logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || "warn" }),
     // ברירת המחדל מפילה שאילתות כבדות בטיימאאוט
     defaultQueryTimeoutMs: undefined,
@@ -348,12 +358,15 @@ function bindEvents(sock, saveCreds, myEpoch) {
           continue;
         }
 
-        // הטלפון שנשלח לבקאנד חייב להיות מספר אמיתי. אם נשאר מזהה LID אטום,
-        // הרשימה הלבנה לא תמצא התאמה וההזמנה תיפול ל"שולח לא מוכר".
-        if (!/^0\d{8,9}$/.test(payload.phone)) {
+        // הטלפון שנשלח לבקאנד חייב לבוא מכתובת של מספר אמיתי.
+        //
+        // הבדיקה היא על ה-JID ולא על הפורמט של המספר: לקוח עם מספר בין-לאומי
+        // הוא תקין לגמרי ואסור שיזהיר, בעוד מזהה LID אטום הוא כן בעיה — הרשימה
+        // הלבנה לא תמצא לו התאמה וההזמנה תיפול ל"שולח לא מוכר".
+        if (!String(senderJid(message.key)).endsWith("@s.whatsapp.net")) {
           log.warn(
-            `  ⤷ ${ctx}: לא חולץ מספר טלפון תקין (התקבל "${payload.phone}") — ` +
-              `ההזמנה תגיע ל"שולח לא מוכר"`
+            `  ⤷ ${ctx}: לא חולצה כתובת עם מספר אמיתי (נשלח "${payload.phone}") — ` +
+              `ההזמנה עלולה להגיע ל"שולח לא מוכר"`
           );
         }
 
