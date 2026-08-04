@@ -30,10 +30,15 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
+  proto,
 } = require("@whiskeysockets/baileys");
 
-const { collectMessage } = require("./functions/collectMessage");
+const { collectMessage, senderJid } = require("./functions/collectMessage");
+const { convertPhone } = require("./functions/convertPhone");
 const { forwardToBackend } = require("./functions/forwardToBackend");
+
+// הסימון ש-Baileys שמה על הודעה שלא הצליחה להיפענח
+const CIPHERTEXT_STUB = proto.WebMessageInfo.StubType.CIPHERTEXT;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  הגדרות
@@ -292,11 +297,29 @@ function bindEvents(sock, saveCreds, myEpoch) {
     for (const message of messages) {
       try {
         const jid = message?.key?.remoteJid || "";
-        const from = jid.split("@")[0];
+        // המספר האמיתי, גם כשווצאפ ממענת ב-LID אטום במקום בטלפון
+        const from = convertPhone(senderJid(message?.key)) || jid.split("@")[0];
+
+        // ── הודעה שלא פוענחה ──
+        //
+        // ‏"No session found to decrypt message" — אין עדיין סשן Signal מול
+        // השולח. קורה בעיקר בהודעות הראשונות אחרי סריקה חדשה. ‏Baileys מבקשת
+        // מווצאפ שליחה חוזרת אוטומטית (עד 5 פעמים), וההודעה בדרך כלל מגיעה
+        // שוב מפוענחת תוך שניות.
+        //
+        // זה **לא** "הודעה ריקה" — זו הזמנה אפשרית שלא הצלחנו לקרוא, ולכן
+        // היא נרשמת כאזהרה ולא כשורת דילוג שגרתית.
+        if (message?.messageStubType === CIPHERTEXT_STUB) {
+          log.warn(
+            `  ⤷ ${from}: ההודעה לא פוענחה (אין סשן הצפנה מול השולח). ` +
+              `ווצאפ תשלח אותה שוב אוטומטית; אם זה חוזר — לבקש מהלקוח לשלוח שנית.`
+          );
+          continue;
+        }
 
         // כל דילוג נרשם עם הסיבה. מסנן שקט הוא מסנן שאי אפשר לאבחן.
         if (!message?.message) {
-          log.info(`  ⤷ ${from}: מדולג — הודעה בלי תוכן`);
+          log.info(`  ⤷ ${from}: מדולג — הודעה בלי תוכן (stub=${message?.messageStubType ?? "—"})`);
           continue;
         }
         if (message.key?.fromMe) {

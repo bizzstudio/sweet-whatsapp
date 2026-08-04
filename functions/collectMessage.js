@@ -127,6 +127,19 @@ const describeMedia = (content) => {
 };
 
 /**
+ * ה-JID שממנו באמת נשלחה ההודעה.
+ *
+ * ‏WhatsApp עברה למערכת כתובות בשם LID: במקום מספר טלפון, השולח מזוהה במזהה
+ * אטום כמו `70846274138355@lid`. ‏`remoteJid` יכיל אז את ה-LID, והמספר האמיתי
+ * יושב בשדה נפרד — `senderPn` בהודעה פרטית, `participantPn` בקבוצה.
+ *
+ * בלי הבחירה הזו הטלפון שמועבר לבקאנד הוא ה-LID, הרשימה הלבנה לא מוצאת התאמה,
+ * וכל הזמנה מלקוח ותיק נוחתת ב"שולח לא מוכר".
+ */
+const senderJid = (key = {}) =>
+  key.senderPn || key.participantPn || key.remoteJid || "";
+
+/**
  * בניית המטען לשליחה. מחזיר null כשאין בהודעה שום דבר להעביר.
  *
  * @param {Object} message  ההודעה הגולמית מ-messages.upsert
@@ -181,7 +194,7 @@ async function collectMessage(message, { sock, logger }) {
 
   return {
     messageId: message.key.id,
-    phone: convertPhone(message.key.remoteJid),
+    phone: convertPhone(senderJid(message.key)),
     name: message.pushName || undefined,
     text: text || undefined,
     timestamp: toNumber(message.messageTimestamp) || undefined,
@@ -189,4 +202,4 @@ async function collectMessage(message, { sock, logger }) {
   };
 }
 
-module.exports = { collectMessage };
+module.exports = { collectMessage, senderJid };
