@@ -206,10 +206,24 @@ function bindEvents(sock, saveCreds, myEpoch) {
 
       // 515 הוא המצב הרגיל מיד אחרי סריקה מוצלחת — Baileys סוגרת ופותחת מחדש.
       // מי שמתייחס אליו כשגיאה יראה כל סריקה "נכשלת".
-      const transient = [515, 428, 408, 503].includes(code);
+      const transient = [
+        DisconnectReason.restartRequired, // 515
+        DisconnectReason.connectionClosed, // 428
+        DisconnectReason.connectionLost, // 408 (= timedOut)
+        DisconnectReason.unavailableService, // 503
+      ].includes(code);
 
-      const unrecoverable =
-        code === DisconnectReason.loggedOut || [401, 403, 419].includes(code);
+      // סשן שאי אפשר להציל — התיקייה נמחקת ונוצר QR חדש.
+      //
+      // ‏badSession (500) הוא הקריטי כאן: הוא נראה כמו שגיאה זמנית אבל אינו כזה.
+      // התחברות חוזרת עם סשן פגום נכשלת שוב ושוב לנצח — זו בדיוק תופעת ה"Bad MAC"
+      // וסשן הזומבי. חייבים למחוק ולסרוק מחדש.
+      const unrecoverable = [
+        DisconnectReason.loggedOut, // 401 — נותק מהטלפון
+        DisconnectReason.forbidden, // 403 — החשבון נחסם
+        DisconnectReason.badSession, // 500 — הסשן פגום
+        DisconnectReason.multideviceMismatch, // 411 — נדרשת סריקה מחדש
+      ].includes(code);
 
       teardown(sock);
       client = null;
@@ -220,6 +234,22 @@ function bindEvents(sock, saveCreds, myEpoch) {
         io.emit("whatsapp-disconnected", { code });
         wipeSession();
         createClient(); // יפיק QR חדש מיד
+        return;
+      }
+
+      // ‏connectionReplaced (440): מישהו אחר חיבר את אותו מספר, או שאותו סשן
+      // נפתח פעמיים. התחברות אוטומטית כאן היא **לולאה אינסופית** — כל צד גונב
+      // את החיבור מהשני בתורו. לכן עוצרים ומודיעים, והחלטה היא של אדם.
+      //
+      // הסשן **אינו** נמחק: הוא תקין, הוא פשוט נלקח.
+      if (code === DisconnectReason.connectionReplaced) {
+        log.error(
+          "החיבור נלקח ע\"י מופע אחר (440). ייתכן ששרת ווצאפ נוסף רץ על אותו " +
+            "auth_data, או שהמספר חובר במקום אחר. ההתחברות האוטומטית נעצרה — " +
+            "יש לוודא שרץ מופע אחד בלבד ולהפעיל מחדש."
+        );
+        currentQr = null;
+        io.emit("whatsapp-disconnected", { code });
         return;
       }
 
@@ -236,7 +266,21 @@ function bindEvents(sock, saveCreds, myEpoch) {
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (stale() || type !== "notify") return;
+    if (stale()) return;
+
+    // כל חבילה נרשמת, כולל כזו שתיזרק מיד.
+    //
+    // בלי השורה הזו "לא רואים כלום בלוג" הוא דו-משמעי: אי אפשר להבחין בין
+    // "שום הודעה לא הגיעה לשרת" לבין "הגיעה ונזרקה על ידי מסנן". ההבדל הזה
+    // הוא בדיוק מה שצריך כדי לאבחן, ולכן הוא לא נשאר שקט.
+    log.info(`חבילת הודעות: ${messages.length}, type=${type}`);
+
+    // רק "notify" הוא הודעה חדשה שמגיעה עכשיו. "append" ו-"prepend" הם
+    // סנכרון היסטוריה — הצ'אט הישן — ואותו במכוון לא קולטים.
+    if (type !== "notify") {
+      log.info(`  ⤷ מדולג: type=${type} (סנכרון היסטוריה, לא הודעה חדשה)`);
+      return;
+    }
 
     if (RUNNING !== "yes") {
       log.info(`RUNNING אינו "yes" — ${messages.length} הודעות לא מועברות`);
@@ -247,12 +291,26 @@ function bindEvents(sock, saveCreds, myEpoch) {
     // ועיבוד messages[0] בלבד מאבד הזמנות בשקט.
     for (const message of messages) {
       try {
-        if (!message?.message || message.key?.fromMe) continue;
+        const jid = message?.key?.remoteJid || "";
+        const from = jid.split("@")[0];
 
-        const jid = message.key.remoteJid || "";
-        // קבוצות, סטטוסים וערוצים אינם הזמנות
-        if (jid.endsWith("@g.us") || jid.endsWith("@newsletter")) continue;
-        if (jid === "status@broadcast") continue;
+        // כל דילוג נרשם עם הסיבה. מסנן שקט הוא מסנן שאי אפשר לאבחן.
+        if (!message?.message) {
+          log.info(`  ⤷ ${from}: מדולג — הודעה בלי תוכן`);
+          continue;
+        }
+        if (message.key?.fromMe) {
+          log.info(`  ⤷ ${from}: מדולג — נשלחה מהמספר המחובר עצמו (fromMe)`);
+          continue;
+        }
+        if (jid.endsWith("@g.us")) {
+          log.info(`  ⤷ ${from}: מדולג — קבוצה`);
+          continue;
+        }
+        if (jid.endsWith("@newsletter") || jid === "status@broadcast") {
+          log.info(`  ⤷ ${from}: מדולג — ערוץ/סטטוס`);
+          continue;
+        }
 
         // ‏@lid הוא מזהה אטום שווצאפ מחזירה במקום מספר כשהשולח הסתיר אותו.
         // ההודעה עדיין מועברת, אבל הרשימה הלבנה בבקאנד לא תמצא התאמה והיא
@@ -262,8 +320,12 @@ function bindEvents(sock, saveCreds, myEpoch) {
         }
 
         const payload = await collectMessage(message, { sock, logger: log });
-        if (!payload) continue;
+        if (!payload) {
+          log.info(`  ⤷ ${from}: מדולג — אין טקסט ואין קובץ (תגובה/אישור קריאה?)`);
+          continue;
+        }
 
+        log.info(`  ⤷ ${payload.phone}: מעביר לבקאנד…`);
         await forwardToBackend(payload, log);
       } catch (err) {
         log.error(`טיפול בהודעה נכשל: ${err.message}`);
